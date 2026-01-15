@@ -5,7 +5,7 @@
 #include <map>
 #include <sstream>
 #include <algorithm>
-#include "Air_control.h"
+#include "../Air_control/Air_control.h"
 
 using namespace std;
 
@@ -150,9 +150,9 @@ int main() {
     cout << "Геопотенциальная высота: " << seaLevel.geopotential_altitude << " м" << endl;
     cout << "Температура: " << seaLevel.temperature << " K" << endl;
     cout << "Давление: " << seaLevel.pressure << " Па" << endl;
-    cout << "Плотность: " << seaLevel.density << " кг/м³" << endl;
+    cout << "Плотность: " << seaLevel.density << " кг/м^3" << endl;
     cout << "Скорость звука: " << seaLevel.speed_of_sound << " м/с" << endl;
-    cout << "Ускорение свободного падения: " << seaLevel.gravity << " м/с²" << endl;
+    cout << "Ускорение свободного падения: " << seaLevel.gravity << " м/с^2" << endl;
     
     return 0;
 }

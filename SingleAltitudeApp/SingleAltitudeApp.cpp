@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
-#include "Air_control.h"
+#include "../Air_control/Air_control.h"
 
 using namespace std;
 
@@ -19,11 +19,16 @@ void printSeparator(int width) {
     cout << "+" << string(width - 2, '-') << "+" << endl;
 }
 
-// Функция для центрирования текста
+// Функция для центрирования текста (исправлена для устранения C4267)
 string centerText(const string& text, int width) {
-    if (text.length() >= width) return text;
-    int padding = (width - text.length()) / 2;
-    return string(padding, ' ') + text + string(width - text.length() - padding, ' ');
+    size_t textLength = text.length();
+    if (textLength >= static_cast<size_t>(width)) return text;
+
+    int intTextLength = static_cast<int>(textLength);
+    int padding = (width - intTextLength) / 2;
+    int totalSpaces = width - intTextLength;
+
+    return string(padding, ' ') + text + string(totalSpaces - padding, ' ');
 }
 
 // Функция для вывода строки таблицы
@@ -51,9 +56,9 @@ void printAltitudeParameters(double altitude) {
     printTableRow("Геометрическая высота", formatNumber(params.geometric_altitude, 0), "м", TABLE_WIDTH);
     printTableRow("Температура", formatNumber(params.temperature, 2), "K", TABLE_WIDTH);
     printTableRow("Давление", formatNumber(params.pressure, 0), "Па", TABLE_WIDTH);
-    printTableRow("Плотность", formatNumber(params.density, 4), "кг/м³", TABLE_WIDTH);
+    printTableRow("Плотность", formatNumber(params.density, 4), "кг/м^3", TABLE_WIDTH);
     printTableRow("Скорость звука", formatNumber(params.speed_of_sound, 2), "м/с", TABLE_WIDTH);
-    printTableRow("Ускорение своб. падения", formatNumber(params.gravity, 5), "м/с²", TABLE_WIDTH);
+    printTableRow("Ускорение своб. падения", formatNumber(params.gravity, 5), "м/с^2", TABLE_WIDTH);
 
     printSeparator(TABLE_WIDTH);
 }
@@ -115,7 +120,7 @@ int main() {
     auto seaLevel = AirControl::AtmosphereCalculator::Calculate(0);
     cout << "Температура: " << formatNumber(seaLevel.temperature, 2) << " K" << endl;
     cout << "Давление: " << formatNumber(seaLevel.pressure, 0) << " Па" << endl;
-    cout << "Плотность: " << formatNumber(seaLevel.density, 4) << " кг/м³" << endl;
+    cout << "Плотность: " << formatNumber(seaLevel.density, 4) << " кг/м^3" << endl;
     cout << "Скорость звука: " << formatNumber(seaLevel.speed_of_sound, 2) << " м/с" << endl;
 
     return 0;
