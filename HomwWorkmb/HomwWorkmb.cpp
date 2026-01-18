@@ -4,20 +4,17 @@
 #include <iomanip>
 #include <fstream>
 #include <string>
-#include <clocale> // Для setlocale
+#include <clocale> 
 #include "../Air_control/Air_control.h"
 
 using namespace std;
 
-// Определяем константу PI, если она не определена
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-// Функция для настройки русской кодировки консоли
 void SetConsoleToRussian() {
     setlocale(LC_ALL, "Russian");
-    // Для консоли Windows устанавливаем кодовую страницу 866 (DOS) или 1251 (Windows)
     system("chcp 1251 > nul"); // Устанавливаем кодовую страницу Windows-1251
 }
 
@@ -30,13 +27,13 @@ const double S_m = 0.231;        // характерная площадь, м^2
 const double g0 = 9.80665;       // ускорение свободного падения на уровне моря, м/с^2
 const double p0N = 101325.0;     // нормальное давление у поверхности Земли, Па
 
-// Исходные данные для варианта Трояновский (15)
+// Исходные данные 
 const double V0 = 65.0;          // начальная скорость, м/с
 const double theta_c0_deg = 48.0; // начальный угол наклона траектории, градусы
 const double theta_c0 = theta_c0_deg * M_PI / 180.0; // в радианах
 const double m_dot = 85.0;       // массовый расход, кг/с
 const double W = 2180.0;         // скорость истечения газов, м/с
-const double y0_val = 3869.0;    // начальная высота, м (переименовано, чтобы избежать конфликта)
+const double y0_val = 3869.0;    // начальная высота, м
 const double omega_z0 = 0.03;    // начальная угловая скорость, с^-1
 const double theta0 = theta_c0;  // начальный угол тангажа, рад
 const double t0 = 0.0;           // начальное время, с
@@ -189,7 +186,7 @@ int main() {
     SetConsoleToRussian();
 
     cout << "==========================================" << endl;
-    cout << "Расчет траектории ЛА (вариант Трояновский)" << endl;
+    cout << "            Расчет траектории ЛА          " << endl;
     cout << "==========================================" << endl;
     cout << "Исходные данные:" << endl;
     cout << "V0 = " << V0 << " м/с" << endl;
@@ -248,7 +245,7 @@ int main() {
         return 1;
     }
 
-    // Заголовок CSV (на английском, чтобы не было проблем с кодировкой в Excel)
+    // Заголовок CSV 
     out << "N,t(s),m(kg),P(N),V(m/s),M,Cxa,alpha(deg),theta_c(deg),Cya,omega_z(1/s),theta(deg),y(m),x(m)" << endl;
 
     // Заголовок для консоли
