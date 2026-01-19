@@ -4,18 +4,22 @@
 #include <iomanip>
 #include <fstream>
 #include <string>
-#include <clocale> 
+#include <windows.h>
+#include <algorithm>
 #include "../Air_control/Air_control.h"
 
 using namespace std;
 
+// Определяем константу PI
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-void SetConsoleToRussian() {
+// Функция для настройки кодировки консоли Windows
+void SetConsoleEncoding() {
+    SetConsoleCP(1251);
+    SetConsoleOutputCP(1251);
     setlocale(LC_ALL, "Russian");
-    system("chcp 1251 > nul"); // Устанавливаем кодовую страницу Windows-1251
 }
 
 // Константы и параметры ЛА
@@ -27,7 +31,7 @@ const double S_m = 0.231;        // характерная площадь, м^2
 const double g0 = 9.80665;       // ускорение свободного падения на уровне моря, м/с^2
 const double p0N = 101325.0;     // нормальное давление у поверхности Земли, Па
 
-// Исходные данные 
+// Исходные данные
 const double V0 = 65.0;          // начальная скорость, м/с
 const double theta_c0_deg = 48.0; // начальный угол наклона траектории, градусы
 const double theta_c0 = theta_c0_deg * M_PI / 180.0; // в радианах
@@ -37,13 +41,42 @@ const double y0_val = 3869.0;    // начальная высота, м
 const double omega_z0 = 0.03;    // начальная угловая скорость, с^-1
 const double theta0 = theta_c0;  // начальный угол тангажа, рад
 const double t0 = 0.0;           // начальное время, с
+const double x0 = 0.0;           // начальная координата x, м
 const double t_k = 3.72;         // время активного участка, с
-const double dt = 0.1;           // шаг интегрирования, с
 
 // Табличные данные для Cxa(M) и Cya(M)
 vector<double> M_values = { 0.01, 0.55, 0.8, 0.9, 1.0, 1.06, 1.1, 1.2, 1.3, 1.4, 2.0, 2.6, 3.4, 6.0, 10.2 };
 vector<double> Cxa_values = { 0.30, 0.30, 0.55, 0.70, 0.84, 0.86, 0.87, 0.83, 0.80, 0.79, 0.65, 0.55, 0.50, 0.45, 0.41 };
 vector<double> Cya_values = { 0.25, 0.25, 0.25, 0.20, 0.30, 0.31, 0.25, 0.25, 0.25, 0.25, 0.20, 0.25, 0.25, 0.25, 0.15 };
+
+// Структура для хранения состояния системы
+struct State {
+    double t;       // время, с
+    double V;       // скорость, м/с
+    double theta_c; // угол наклона траектории, рад
+    double x;       // координата x, м
+    double y;       // координата y, м
+    double omega_z; // угловая скорость, рад/с
+    double theta;   // угол тангажа, рад
+    double m;       // масса, кг
+};
+
+// Структура для хранения результатов записи
+struct RecordData {
+    double t;
+    double m;
+    double P;
+    double V;
+    double M;
+    double Cxa;
+    double alpha_deg;
+    double theta_c_deg;
+    double Cya;
+    double omega_z;
+    double theta_deg;
+    double y;
+    double x;
+};
 
 // Функция линейной интерполяции
 double interpolate(const vector<double>& x_vals, const vector<double>& y_vals, double x) {
@@ -67,21 +100,8 @@ double get_Cya(double M) {
     return interpolate(M_values, Cya_values, M);
 }
 
-// Структура для хранения состояния системы
-struct State {
-    double V;      // скорость, м/с
-    double theta_c; // угол наклона траектории, рад
-    double x_c;    // координата x, м
-    double y_c;    // координата y, м
-    double omega_z; // угловая скорость, рад/с
-    double theta;  // угол тангажа, рад
-    double t;      // время, с
-    double m;      // масса, кг
-};
-
 // Функция для вычисления производных (правые части уравнений)
-void derivatives(const State& s, State& dsdt, const AirControl::AtmosphereParams& atm) {
-    double alpha = s.theta - s.theta_c; // угол атаки, рад
+void derivatives(const State& s, State& dsdt, const AirControl::AtmosphereParams& atm, double alpha) {
     double M = s.V / atm.speed_of_sound; // число Маха
 
     // Аэродинамические коэффициенты
@@ -119,74 +139,338 @@ void derivatives(const State& s, State& dsdt, const AirControl::AtmosphereParams
     else {
         dsdt.theta_c = 0.0;
     }
-    dsdt.x_c = s.V * cos(s.theta_c);
-    dsdt.y_c = s.V * sin(s.theta_c);
+    dsdt.x = s.V * cos(s.theta_c);
+    dsdt.y = s.V * sin(s.theta_c);
     dsdt.omega_z = M_z / Jz;
     dsdt.theta = s.omega_z;
     dsdt.t = 1.0;
     dsdt.m = -m_dot;
 }
 
-// Метод Рунге-Кутта 4-го порядка
-void rungeKuttaStep(State& s, double dt, const AirControl::AtmosphereParams& atm) {
-    State k1, k2, k3, k4, temp;
+// Метод Эйлера
+vector<State> eulerMethod(double dt, double alpha_type, double t_end = 3.8) {
+    State s;
+    s.t = t0;
+    s.V = V0;
+    s.theta_c = theta_c0;
+    s.x = x0;
+    s.y = y0_val;
+    s.omega_z = omega_z0;
+    s.theta = theta0;
+    s.m = m0;
 
-    // k1
-    derivatives(s, k1, atm);
+    vector<State> results;
+    results.push_back(s);
 
-    // k2
-    temp.V = s.V + 0.5 * dt * k1.V;
-    temp.theta_c = s.theta_c + 0.5 * dt * k1.theta_c;
-    temp.x_c = s.x_c + 0.5 * dt * k1.x_c;
-    temp.y_c = s.y_c + 0.5 * dt * k1.y_c;
-    temp.omega_z = s.omega_z + 0.5 * dt * k1.omega_z;
-    temp.theta = s.theta + 0.5 * dt * k1.theta;
-    temp.t = s.t + 0.5 * dt;
-    temp.m = s.m + 0.5 * dt * k1.m;
-    derivatives(temp, k2, atm);
+    for (double t = t0 + dt; t <= t_end + dt / 2; t += dt) {
+        // Расчет параметров атмосферы
+        AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y);
 
-    // k3
-    temp.V = s.V + 0.5 * dt * k2.V;
-    temp.theta_c = s.theta_c + 0.5 * dt * k2.theta_c;
-    temp.x_c = s.x_c + 0.5 * dt * k2.x_c;
-    temp.y_c = s.y_c + 0.5 * dt * k2.y_c;
-    temp.omega_z = s.omega_z + 0.5 * dt * k2.omega_z;
-    temp.theta = s.theta + 0.5 * dt * k2.theta;
-    temp.t = s.t + 0.5 * dt;
-    temp.m = s.m + 0.5 * dt * k2.m;
-    derivatives(temp, k3, atm);
+        // Вычисление угла атаки
+        double alpha;
+        if (alpha_type == 0) {
+            alpha = 0.0;
+        }
+        else {
+            alpha = s.theta - s.theta_c;
+        }
 
-    // k4
-    temp.V = s.V + dt * k3.V;
-    temp.theta_c = s.theta_c + dt * k3.theta_c;
-    temp.x_c = s.x_c + dt * k3.x_c;
-    temp.y_c = s.y_c + dt * k3.y_c;
-    temp.omega_z = s.omega_z + dt * k3.omega_z;
-    temp.theta = s.theta + dt * k3.theta;
-    temp.t = s.t + dt;
-    temp.m = s.m + dt * k3.m;
-    derivatives(temp, k4, atm);
+        // Вычисление производных
+        State dsdt;
+        derivatives(s, dsdt, atm, alpha);
 
-    // Обновление состояния
-    s.V += dt / 6.0 * (k1.V + 2 * k2.V + 2 * k3.V + k4.V);
-    s.theta_c += dt / 6.0 * (k1.theta_c + 2 * k2.theta_c + 2 * k3.theta_c + k4.theta_c);
-    s.x_c += dt / 6.0 * (k1.x_c + 2 * k2.x_c + 2 * k3.x_c + k4.x_c);
-    s.y_c += dt / 6.0 * (k1.y_c + 2 * k2.y_c + 2 * k3.y_c + k4.y_c);
-    s.omega_z += dt / 6.0 * (k1.omega_z + 2 * k2.omega_z + 2 * k3.omega_z + k4.omega_z);
-    s.theta += dt / 6.0 * (k1.theta + 2 * k2.theta + 2 * k3.theta + k4.theta);
-    s.t += dt;
-    s.m += dt / 6.0 * (k1.m + 2 * k2.m + 2 * k3.m + k4.m);
+        // Шаг Эйлера
+        s.V += dt * dsdt.V;
+        s.theta_c += dt * dsdt.theta_c;
+        s.x += dt * dsdt.x;
+        s.y += dt * dsdt.y;
+        s.omega_z += dt * dsdt.omega_z;
+        s.theta += dt * dsdt.theta;
+        s.t += dt;
+        s.m += dt * dsdt.m;
 
-    // Защита от отрицательной массы
-    if (s.m < 0) s.m = 0;
+        // Защита от отрицательной массы
+        if (s.m < 0) s.m = 0;
+
+        results.push_back(s);
+    }
+
+    return results;
 }
 
+// Модифицированный метод Эйлера
+vector<State> modifiedEulerMethod(double dt, double alpha_type, double t_end = 3.8) {
+    State s;
+    s.t = t0;
+    s.V = V0;
+    s.theta_c = theta_c0;
+    s.x = x0;
+    s.y = y0_val;
+    s.omega_z = omega_z0;
+    s.theta = theta0;
+    s.m = m0;
+
+    vector<State> results;
+    results.push_back(s);
+
+    for (double t = t0 + dt; t <= t_end + dt / 2; t += dt) {
+        // Расчет параметров атмосферы
+        AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y);
+
+        // Вычисление угла атаки
+        double alpha;
+        if (alpha_type == 0) {
+            alpha = 0.0;
+        }
+        else {
+            alpha = s.theta - s.theta_c;
+        }
+
+        // Первая производная
+        State k1;
+        derivatives(s, k1, atm, alpha);
+
+        // Промежуточное состояние
+        State s_temp = s;
+        s_temp.V += dt / 2 * k1.V;
+        s_temp.theta_c += dt / 2 * k1.theta_c;
+        s_temp.x += dt / 2 * k1.x;
+        s_temp.y += dt / 2 * k1.y;
+        s_temp.omega_z += dt / 2 * k1.omega_z;
+        s_temp.theta += dt / 2 * k1.theta;
+        s_temp.m += dt / 2 * k1.m;
+
+        // Вторая производная в промежуточной точке
+        AirControl::AtmosphereParams atm_temp = AirControl::AtmosphereCalculator::Calculate(s_temp.y);
+        State k2;
+        derivatives(s_temp, k2, atm_temp, alpha);
+
+        // Полный шаг
+        s.V += dt * k2.V;
+        s.theta_c += dt * k2.theta_c;
+        s.x += dt * k2.x;
+        s.y += dt * k2.y;
+        s.omega_z += dt * k2.omega_z;
+        s.theta += dt * k2.theta;
+        s.t += dt;
+        s.m += dt * k2.m;
+
+        // Защита от отрицательной массы
+        if (s.m < 0) s.m = 0;
+
+        results.push_back(s);
+    }
+
+    return results;
+}
+
+// Метод Рунге-Кутта 4-го порядка
+vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8) {
+    State s;
+    s.t = t0;
+    s.V = V0;
+    s.theta_c = theta_c0;
+    s.x = x0;
+    s.y = y0_val;
+    s.omega_z = omega_z0;
+    s.theta = theta0;
+    s.m = m0;
+
+    vector<State> results;
+    results.push_back(s);
+
+    for (double t = t0 + dt; t <= t_end + dt / 2; t += dt) {
+        // Расчет параметров атмосферы
+        AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y);
+
+        // Вычисление угла атаки
+        double alpha;
+        if (alpha_type == 0) {
+            alpha = 0.0;
+        }
+        else {
+            alpha = s.theta - s.theta_c;
+        }
+
+        // k1
+        State k1;
+        derivatives(s, k1, atm, alpha);
+
+        // k2
+        State s2 = s;
+        s2.V += dt / 2 * k1.V;
+        s2.theta_c += dt / 2 * k1.theta_c;
+        s2.x += dt / 2 * k1.x;
+        s2.y += dt / 2 * k1.y;
+        s2.omega_z += dt / 2 * k1.omega_z;
+        s2.theta += dt / 2 * k1.theta;
+        s2.m += dt / 2 * k1.m;
+
+        AirControl::AtmosphereParams atm2 = AirControl::AtmosphereCalculator::Calculate(s2.y);
+        State k2;
+        derivatives(s2, k2, atm2, alpha);
+
+        // k3
+        State s3 = s;
+        s3.V += dt / 2 * k2.V;
+        s3.theta_c += dt / 2 * k2.theta_c;
+        s3.x += dt / 2 * k2.x;
+        s3.y += dt / 2 * k2.y;
+        s3.omega_z += dt / 2 * k2.omega_z;
+        s3.theta += dt / 2 * k2.theta;
+        s3.m += dt / 2 * k2.m;
+
+        AirControl::AtmosphereParams atm3 = AirControl::AtmosphereCalculator::Calculate(s3.y);
+        State k3;
+        derivatives(s3, k3, atm3, alpha);
+
+        // k4
+        State s4 = s;
+        s4.V += dt * k3.V;
+        s4.theta_c += dt * k3.theta_c;
+        s4.x += dt * k3.x;
+        s4.y += dt * k3.y;
+        s4.omega_z += dt * k3.omega_z;
+        s4.theta += dt * k3.theta;
+        s4.m += dt * k3.m;
+
+        AirControl::AtmosphereParams atm4 = AirControl::AtmosphereCalculator::Calculate(s4.y);
+        State k4;
+        derivatives(s4, k4, atm4, alpha);
+
+        // Обновление состояния
+        s.V += dt / 6 * (k1.V + 2 * k2.V + 2 * k3.V + k4.V);
+        s.theta_c += dt / 6 * (k1.theta_c + 2 * k2.theta_c + 2 * k3.theta_c + k4.theta_c);
+        s.x += dt / 6 * (k1.x + 2 * k2.x + 2 * k3.x + k4.x);
+        s.y += dt / 6 * (k1.y + 2 * k2.y + 2 * k3.y + k4.y);
+        s.omega_z += dt / 6 * (k1.omega_z + 2 * k2.omega_z + 2 * k3.omega_z + k4.omega_z);
+        s.theta += dt / 6 * (k1.theta + 2 * k2.theta + 2 * k3.theta + k4.theta);
+        s.t += dt;
+        s.m += dt / 6 * (k1.m + 2 * k2.m + 2 * k3.m + k4.m);
+
+        // Защита от отрицательной массы
+        if (s.m < 0) s.m = 0;
+
+        results.push_back(s);
+    }
+
+    return results;
+}
+
+// Функция для интерполяции состояния в заданное время
+State interpolateState(const vector<State>& states, double target_time) {
+    if (states.empty()) return State();
+
+    // Если время меньше первого, возвращаем первое состояние
+    if (target_time <= states[0].t) return states[0];
+
+    // Если время больше последнего, возвращаем последнее состояние
+    if (target_time >= states.back().t) return states.back();
+
+    // Ищем два соседних состояния для интерполяции
+    for (size_t i = 0; i < states.size() - 1; i++) {
+        if (states[i].t <= target_time && target_time <= states[i + 1].t) {
+            double t1 = states[i].t;
+            double t2 = states[i + 1].t;
+            double alpha = (target_time - t1) / (t2 - t1);
+
+            State result;
+            result.t = target_time;
+            result.V = states[i].V + alpha * (states[i + 1].V - states[i].V);
+            result.theta_c = states[i].theta_c + alpha * (states[i + 1].theta_c - states[i].theta_c);
+            result.x = states[i].x + alpha * (states[i + 1].x - states[i].x);
+            result.y = states[i].y + alpha * (states[i + 1].y - states[i].y);
+            result.omega_z = states[i].omega_z + alpha * (states[i + 1].omega_z - states[i].omega_z);
+            result.theta = states[i].theta + alpha * (states[i + 1].theta - states[i].theta);
+            result.m = states[i].m + alpha * (states[i + 1].m - states[i].m);
+            return result;
+        }
+    }
+
+    return states.back();
+}
+
+// Функция для создания записи данных
+RecordData createRecord(const State& s, double alpha_type) {
+    RecordData record;
+    record.t = s.t;
+    record.m = s.m;
+
+    // Расчет параметров атмосферы
+    AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y);
+
+    // Тяга
+    double P0 = m_dot * W;
+    record.P = P0 + S_a * (p0N - atm.pressure);
+
+    record.V = s.V;
+    record.M = s.V / atm.speed_of_sound;
+    record.Cxa = get_Cxa(record.M);
+
+    // Угол атаки
+    double alpha;
+    if (alpha_type == 0) {
+        alpha = 0.0;
+    }
+    else {
+        alpha = s.theta - s.theta_c;
+    }
+    record.alpha_deg = alpha * 180.0 / M_PI;
+
+    record.theta_c_deg = s.theta_c * 180.0 / M_PI;
+
+    double Cya_alpha = get_Cya(record.M);
+    record.Cya = Cya_alpha * alpha;
+
+    record.omega_z = s.omega_z;
+    record.theta_deg = s.theta * 180.0 / M_PI;
+    record.y = s.y;
+    record.x = s.x;
+
+    return record;
+}
+
+// Функция для записи результатов в CSV файл
+void writeToCSV(const string& filename, const vector<RecordData>& records) {
+    ofstream out(filename);
+    if (!out) {
+        cerr << "Ошибка открытия файла: " << filename << endl;
+        return;
+    }
+
+    // Заголовок CSV
+    out << "N,t(s),m(kg),P(N),V(m/s),M,Cxa,alpha(deg),theta_c(deg),Cya,omega_z(1/s),theta(deg),y(m),x(m)" << endl;
+
+    for (size_t i = 0; i < records.size(); ++i) {
+        const RecordData& r = records[i];
+        out << fixed << setprecision(6)
+            << i + 1 << ","
+            << r.t << ","
+            << r.m << ","
+            << r.P << ","
+            << r.V << ","
+            << r.M << ","
+            << r.Cxa << ","
+            << r.alpha_deg << ","
+            << r.theta_c_deg << ","
+            << r.Cya << ","
+            << r.omega_z << ","
+            << r.theta_deg << ","
+            << r.y << ","
+            << r.x << endl;
+    }
+
+    out.close();
+    cout << "Результаты записаны в файл: " << filename << endl;
+}
+
+// Основная функция
 int main() {
-    // Настройка русской кодировки консоли
-    SetConsoleToRussian();
+    // Настройка кодировки консоли
+    SetConsoleEncoding();
 
     cout << "==========================================" << endl;
-    cout << "            Расчет траектории ЛА          " << endl;
+    cout << "           Расчет траектории ЛА           " << endl;
     cout << "==========================================" << endl;
     cout << "Исходные данные:" << endl;
     cout << "V0 = " << V0 << " м/с" << endl;
@@ -196,133 +480,111 @@ int main() {
     cout << "y0 = " << y0_val << " м" << endl;
     cout << "omega_z0 = " << omega_z0 << " 1/с" << endl;
     cout << "t_k = " << t_k << " с" << endl;
-    cout << "dt = " << dt << " с" << endl;
     cout << "==========================================" << endl;
 
-    // Начальное состояние
-    State s;
-    s.V = V0;
-    s.theta_c = theta_c0;
-    s.x_c = 0.0;
-    s.y_c = y0_val;
-    s.omega_z = omega_z0;
-    s.theta = theta0;
-    s.t = t0;
-    s.m = m0;
+    // Массивы для хранения информации о методах
+    vector<string> method_names = { "Euler", "ModifiedEuler", "RungeKutta" };
+    vector<double> euler_steps = { 0.1, 0.01, 0.001 };
+    vector<double> modified_euler_steps = { 0.1, 0.01 };
+    vector<double> runge_kutta_steps = { 0.1 };
+    vector<double> alpha_types = { 0, 1 }; // 0: alpha=0, 1: alpha=theta-theta_c
 
-    // Вектор для хранения результатов
-    vector<State> results;
-    results.push_back(s);
+    // Времена для вывода (с шагом 0.1 с и 3.72 с)
+    vector<double> output_times;
+    for (double t = 0.0; t <= 3.8; t += 0.1) {
+        output_times.push_back(t);
+    }
+    // Добавляем время 3.72 с
+    output_times.push_back(3.72);
+    // Сортируем времена
+    sort(output_times.begin(), output_times.end());
 
-    // Интегрирование по времени
-    int step_count = 0;
-    cout << "\nНачало интегрирования..." << endl;
+    // Перебор всех методов и углов атаки
+    for (size_t method_idx = 0; method_idx < method_names.size(); ++method_idx) {
+        string method_name = method_names[method_idx];
+        vector<double> steps;
 
-    for (double t = t0 + dt; t <= t_k + 0.5 * dt; t += dt) {
-        step_count++;
+        if (method_name == "Euler") {
+            steps = euler_steps;
+        }
+        else if (method_name == "ModifiedEuler") {
+            steps = modified_euler_steps;
+        }
+        else if (method_name == "RungeKutta") {
+            steps = runge_kutta_steps;
+        }
 
-        // Расчет параметров атмосферы на текущей высоте
-        AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y_c);
+        for (double dt : steps) {
+            for (double alpha_type : alpha_types) {
+                cout << "\nВыполнение расчета: " << method_name
+                    << ", шаг = " << dt
+                    << ", alpha_type = " << (alpha_type == 0 ? "0" : "theta-theta_c") << endl;
 
-        // Шаг метода Рунге-Кутта
-        rungeKuttaStep(s, dt, atm);
+                // Выполнение расчета методом
+                vector<State> states;
+                if (method_name == "Euler") {
+                    states = eulerMethod(dt, alpha_type, 3.8);
+                }
+                else if (method_name == "ModifiedEuler") {
+                    states = modifiedEulerMethod(dt, alpha_type, 3.8);
+                }
+                else if (method_name == "RungeKutta") {
+                    states = rungeKuttaMethod(dt, alpha_type, 3.8);
+                }
 
-        // Сохранение результатов
-        results.push_back(s);
+                // Интерполяция состояний для заданных времен
+                vector<RecordData> records;
+                for (double t : output_times) {
+                    State s_interp = interpolateState(states, t);
+                    RecordData record = createRecord(s_interp, alpha_type);
+                    records.push_back(record);
+                }
 
-        // Вывод прогресса
-        if (step_count % 10 == 0) {
-            cout << "Шаг " << step_count << ": t = " << s.t << " с, y = " << s.y_c << " м, V = " << s.V << " м/с" << endl;
+                // Создание имени файла
+                string filename = method_name + "_step" + to_string(dt).substr(0, 4) +
+                    "_alpha" + (alpha_type == 0 ? "0" : "var") + ".csv";
+
+                // Запись в CSV
+                writeToCSV(filename, records);
+
+                // Вывод первых нескольких строк для проверки
+                cout << "Первые 5 строк результатов:" << endl;
+                cout << "t(s)\tm(kg)\tV(m/s)\ty(m)\tx(m)\talpha(deg)" << endl;
+                for (int i = 0; i < min(5, (int)records.size()); ++i) {
+                    cout << fixed << setprecision(2)
+                        << records[i].t << "\t"
+                        << records[i].m << "\t"
+                        << records[i].V << "\t"
+                        << records[i].y << "\t"
+                        << records[i].x << "\t"
+                        << records[i].alpha_deg << endl;
+                }
+            }
         }
     }
 
-    cout << "\nИнтегрирование завершено. Всего шагов: " << step_count << endl;
-
-    // Вывод результатов в консоль и запись в CSV
-    ofstream out("results.csv");
-    if (!out) {
-        cerr << "Ошибка открытия файла для записи!" << endl;
-        return 1;
-    }
-
-    // Заголовок CSV 
-    out << "N,t(s),m(kg),P(N),V(m/s),M,Cxa,alpha(deg),theta_c(deg),Cya,omega_z(1/s),theta(deg),y(m),x(m)" << endl;
-
-    // Заголовок для консоли
     cout << "\n==========================================" << endl;
-    cout << "Результаты расчетов:" << endl;
-    cout << "==========================================" << endl;
-    cout << setw(5) << "N"
-        << setw(10) << "t, с"
-        << setw(10) << "m, кг"
-        << setw(12) << "V, м/с"
-        << setw(10) << "y, м"
-        << setw(10) << "x, м"
-        << setw(12) << "alpha, град"
-        << endl;
-    cout << "------------------------------------------" << endl;
+    cout << "Все расчеты завершены!" << endl;
+    cout << "Созданы следующие файлы:" << endl;
 
-    for (size_t i = 0; i < results.size(); ++i) {
-        State& s = results[i];
-        AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y_c);
+    // Вывод списка созданных файлов
+    vector<string> created_files;
+    for (size_t method_idx = 0; method_idx < method_names.size(); ++method_idx) {
+        string method_name = method_names[method_idx];
+        vector<double> steps;
 
-        double M = s.V / atm.speed_of_sound;
-        double Cxa = get_Cxa(M);
-        double Cya_alpha = get_Cya(M);
-        double alpha_rad = s.theta - s.theta_c;
-        double alpha_deg = alpha_rad * 180.0 / M_PI;
-        double Cya = Cya_alpha * alpha_rad;
-        double P0 = m_dot * W;
-        double P = P0 + S_a * (p0N - atm.pressure);
+        if (method_name == "Euler") steps = euler_steps;
+        else if (method_name == "ModifiedEuler") steps = modified_euler_steps;
+        else if (method_name == "RungeKutta") steps = runge_kutta_steps;
 
-        // Запись в CSV
-        out << fixed << setprecision(6)
-            << i + 1 << ","
-            << s.t << ","
-            << s.m << ","
-            << P << ","
-            << s.V << ","
-            << M << ","
-            << Cxa << ","
-            << alpha_deg << ","
-            << s.theta_c * 180.0 / M_PI << ","
-            << Cya << ","
-            << s.omega_z << ","
-            << s.theta * 180.0 / M_PI << ","
-            << s.y_c << ","
-            << s.x_c << endl;
-
-        // Вывод в консоль каждые 5 шагов
-        if (i % 5 == 0 || i == results.size() - 1) {
-            cout << fixed << setprecision(2)
-                << setw(5) << i + 1
-                << setw(10) << s.t
-                << setw(10) << s.m
-                << setw(12) << s.V
-                << setw(10) << s.y_c
-                << setw(10) << s.x_c
-                << setw(12) << alpha_deg
-                << endl;
+        for (double dt : steps) {
+            for (double alpha_type : alpha_types) {
+                string filename = method_name + "_step" + to_string(dt).substr(0, 4) +
+                    "_alpha" + (alpha_type == 0 ? "0" : "var") + ".csv";
+                created_files.push_back(filename);
+                cout << "  - " << filename << endl;
+            }
         }
     }
-
-    out.close();
-
-    // Финальный вывод
-    cout << "==========================================" << endl;
-    if (!results.empty()) {
-        State & final = results.back();
-        cout << "\nФинальные параметры:" << endl;
-        cout << "Время: " << final.t << " с" << endl;
-        cout << "Скорость: " << final.V << " м/с" << endl;
-        cout << "Высота: " << final.y_c << " м" << endl;
-        cout << "Дальность: " << final.x_c << " м" << endl;
-        cout << "Масса: " << final.m << " кг" << endl;
-    }
-
-    cout << "\nРезультаты сохранены в файл results.csv" << endl;
-
-    system("pause");
-
     return 0;
 }
