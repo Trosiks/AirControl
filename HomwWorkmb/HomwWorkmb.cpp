@@ -279,24 +279,13 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
     vector<State> results;
     results.push_back(s);
 
-    for (double t = t0 + dt; t <= t_end + dt / 2; t += dt) {
-        // Расчет параметров атмосферы
-        AirControl::AtmosphereParams atm = AirControl::AtmosphereCalculator::Calculate(s.y);
+    for (double t = t0; t < t_end - dt / 2; t += dt) {
+        AirControl::AtmosphereParams atm1 = AirControl::AtmosphereCalculator::Calculate(s.y);
+        double alpha1 = (alpha_type == 0) ? 0.0 : (s.theta - s.theta_c);
 
-        // Вычисление угла атаки
-        double alpha;
-        if (alpha_type == 0) {
-            alpha = 0.0;
-        }
-        else {
-            alpha = s.theta - s.theta_c;
-        }
-
-        // k1
         State k1;
-        derivatives(s, k1, atm, alpha);
+        derivatives(s, k1, atm1, alpha1);
 
-        // k2
         State s2 = s;
         s2.V += dt / 2 * k1.V;
         s2.theta_c += dt / 2 * k1.theta_c;
@@ -304,13 +293,15 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s2.y += dt / 2 * k1.y;
         s2.omega_z += dt / 2 * k1.omega_z;
         s2.theta += dt / 2 * k1.theta;
-        s2.m += dt / 2 * k1.m;
+        s2.t += dt / 2;
+        s2.m = m0 - m_dot * s2.t;  
 
         AirControl::AtmosphereParams atm2 = AirControl::AtmosphereCalculator::Calculate(s2.y);
-        State k2;
-        derivatives(s2, k2, atm2, alpha);
+        double alpha2 = (alpha_type == 0) ? 0.0 : (s2.theta - s2.theta_c);
 
-        // k3
+        State k2;
+        derivatives(s2, k2, atm2, alpha2);
+
         State s3 = s;
         s3.V += dt / 2 * k2.V;
         s3.theta_c += dt / 2 * k2.theta_c;
@@ -318,13 +309,15 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s3.y += dt / 2 * k2.y;
         s3.omega_z += dt / 2 * k2.omega_z;
         s3.theta += dt / 2 * k2.theta;
-        s3.m += dt / 2 * k2.m;
+        s3.t += dt / 2;
+        s3.m = m0 - m_dot * s3.t;
 
         AirControl::AtmosphereParams atm3 = AirControl::AtmosphereCalculator::Calculate(s3.y);
-        State k3;
-        derivatives(s3, k3, atm3, alpha);
+        double alpha3 = (alpha_type == 0) ? 0.0 : (s3.theta - s3.theta_c);
 
-        // k4
+        State k3;
+        derivatives(s3, k3, atm3, alpha3);
+
         State s4 = s;
         s4.V += dt * k3.V;
         s4.theta_c += dt * k3.theta_c;
@@ -332,31 +325,30 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s4.y += dt * k3.y;
         s4.omega_z += dt * k3.omega_z;
         s4.theta += dt * k3.theta;
-        s4.m += dt * k3.m;
+        s4.t += dt;
+        s4.m = m0 - m_dot * s4.t;
 
         AirControl::AtmosphereParams atm4 = AirControl::AtmosphereCalculator::Calculate(s4.y);
+        double alpha4 = (alpha_type == 0) ? 0.0 : (s4.theta - s4.theta_c);
+
         State k4;
-        derivatives(s4, k4, atm4, alpha);
+        derivatives(s4, k4, atm4, alpha4);
 
-        // Обновление состояния
-        s.V += dt / 6 * (k1.V + 2 * k2.V + 2 * k3.V + k4.V);
-        s.theta_c += dt / 6 * (k1.theta_c + 2 * k2.theta_c + 2 * k3.theta_c + k4.theta_c);
-        s.x += dt / 6 * (k1.x + 2 * k2.x + 2 * k3.x + k4.x);
-        s.y += dt / 6 * (k1.y + 2 * k2.y + 2 * k3.y + k4.y);
-        s.omega_z += dt / 6 * (k1.omega_z + 2 * k2.omega_z + 2 * k3.omega_z + k4.omega_z);
-        s.theta += dt / 6 * (k1.theta + 2 * k2.theta + 2 * k3.theta + k4.theta);
+        s.V += dt / 6.0 * (k1.V + 2 * k2.V + 2 * k3.V + k4.V);
+        s.theta_c += dt / 6.0 * (k1.theta_c + 2 * k2.theta_c + 2 * k3.theta_c + k4.theta_c);
+        s.x += dt / 6.0 * (k1.x + 2 * k2.x + 2 * k3.x + k4.x);
+        s.y += dt / 6.0 * (k1.y + 2 * k2.y + 2 * k3.y + k4.y);
+        s.omega_z += dt / 6.0 * (k1.omega_z + 2 * k2.omega_z + 2 * k3.omega_z + k4.omega_z);
+        s.theta += dt / 6.0 * (k1.theta + 2 * k2.theta + 2 * k3.theta + k4.theta);
         s.t += dt;
-        s.m += dt / 6 * (k1.m + 2 * k2.m + 2 * k3.m + k4.m);
+        s.m = m0 - m_dot * s.t;  
 
-        // Защита от отрицательной массы
         if (s.m < 0) s.m = 0;
-
         results.push_back(s);
     }
 
     return results;
 }
-
 // Функция для интерполяции состояния в заданное время
 State interpolateState(const vector<State>& states, double target_time) {
     if (states.empty()) return State();
