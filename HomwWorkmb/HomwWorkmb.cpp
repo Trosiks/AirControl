@@ -187,7 +187,8 @@ vector<State> eulerMethod(double dt, double alpha_type, double t_end = 3.8) {
         s.omega_z += dt * dsdt.omega_z;
         s.theta += dt * dsdt.theta;
         s.t += dt;
-        s.m += dt * dsdt.m;
+        // ИСПРАВЛЕНО: масса рассчитывается по времени, а не интегрированием
+        s.m = m0 - m_dot * s.t;
 
         // Защита от отрицательной массы
         if (s.m < 0) s.m = 0;
@@ -231,6 +232,7 @@ vector<State> modifiedEulerMethod(double dt, double alpha_type, double t_end = 3
         derivatives(s, k1, atm, alpha);
 
         // Промежуточное состояние
+        // ИСПРАВЛЕНО: создаём копию состояния и обновляем ВСЕ параметры
         State s_temp = s;
         s_temp.V += dt / 2 * k1.V;
         s_temp.theta_c += dt / 2 * k1.theta_c;
@@ -238,12 +240,22 @@ vector<State> modifiedEulerMethod(double dt, double alpha_type, double t_end = 3
         s_temp.y += dt / 2 * k1.y;
         s_temp.omega_z += dt / 2 * k1.omega_z;
         s_temp.theta += dt / 2 * k1.theta;
-        s_temp.m += dt / 2 * k1.m;
+        s_temp.t += dt / 2;  // ИСПРАВЛЕНО: обновляем время
+        s_temp.m = m0 - m_dot * s_temp.t;  // ИСПРАВЛЕНО: масса по времени
 
         // Вторая производная в промежуточной точке
         AirControl::AtmosphereParams atm_temp = AirControl::AtmosphereCalculator::Calculate(s_temp.y);
         State k2;
-        derivatives(s_temp, k2, atm_temp, alpha);
+        // ИСПРАВЛЕНО: используем тот же угол атаки, что и для k1? 
+        // На самом деле alpha может зависеть от состояния, поэтому пересчитываем:
+        double alpha_temp;
+        if (alpha_type == 0) {
+            alpha_temp = 0.0;
+        }
+        else {
+            alpha_temp = s_temp.theta - s_temp.theta_c;
+        }
+        derivatives(s_temp, k2, atm_temp, alpha_temp);
 
         // Полный шаг
         s.V += dt * k2.V;
@@ -253,7 +265,7 @@ vector<State> modifiedEulerMethod(double dt, double alpha_type, double t_end = 3
         s.omega_z += dt * k2.omega_z;
         s.theta += dt * k2.theta;
         s.t += dt;
-        s.m += dt * k2.m;
+        s.m = m0 - m_dot * s.t;  // ИСПРАВЛЕНО: масса по времени
 
         // Защита от отрицательной массы
         if (s.m < 0) s.m = 0;
@@ -279,7 +291,8 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
     vector<State> results;
     results.push_back(s);
 
-    for (double t = t0; t < t_end - dt / 2; t += dt) {
+    // ИСПРАВЛЕНО: условие цикла гарантирует расчет до t_end включительно
+    for (double t = t0; t < t_end + dt / 2; t += dt) {
         AirControl::AtmosphereParams atm1 = AirControl::AtmosphereCalculator::Calculate(s.y);
         double alpha1 = (alpha_type == 0) ? 0.0 : (s.theta - s.theta_c);
 
@@ -294,7 +307,8 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s2.omega_z += dt / 2 * k1.omega_z;
         s2.theta += dt / 2 * k1.theta;
         s2.t += dt / 2;
-        s2.m = m0 - m_dot * s2.t;  
+        // ИСПРАВЛЕНО: масса по времени для промежуточного состояния
+        s2.m = m0 - m_dot * s2.t;
 
         AirControl::AtmosphereParams atm2 = AirControl::AtmosphereCalculator::Calculate(s2.y);
         double alpha2 = (alpha_type == 0) ? 0.0 : (s2.theta - s2.theta_c);
@@ -310,6 +324,7 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s3.omega_z += dt / 2 * k2.omega_z;
         s3.theta += dt / 2 * k2.theta;
         s3.t += dt / 2;
+        // ИСПРАВЛЕНО: масса по времени для промежуточного состояния
         s3.m = m0 - m_dot * s3.t;
 
         AirControl::AtmosphereParams atm3 = AirControl::AtmosphereCalculator::Calculate(s3.y);
@@ -326,6 +341,7 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s4.omega_z += dt * k3.omega_z;
         s4.theta += dt * k3.theta;
         s4.t += dt;
+        // ИСПРАВЛЕНО: масса по времени для промежуточного состояния
         s4.m = m0 - m_dot * s4.t;
 
         AirControl::AtmosphereParams atm4 = AirControl::AtmosphereCalculator::Calculate(s4.y);
@@ -341,7 +357,8 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
         s.omega_z += dt / 6.0 * (k1.omega_z + 2 * k2.omega_z + 2 * k3.omega_z + k4.omega_z);
         s.theta += dt / 6.0 * (k1.theta + 2 * k2.theta + 2 * k3.theta + k4.theta);
         s.t += dt;
-        s.m = m0 - m_dot * s.t;  
+        // ИСПРАВЛЕНО: масса по времени для итогового состояния
+        s.m = m0 - m_dot * s.t;
 
         if (s.m < 0) s.m = 0;
         results.push_back(s);
@@ -349,9 +366,17 @@ vector<State> rungeKuttaMethod(double dt, double alpha_type, double t_end = 3.8)
 
     return results;
 }
+
 // Функция для интерполяции состояния в заданное время
 State interpolateState(const vector<State>& states, double target_time) {
     if (states.empty()) return State();
+
+    // Проверка на точное совпадение времени (оптимизация)
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (fabs(states[i].t - target_time) < 1e-9) {
+            return states[i];
+        }
+    }
 
     // Если время меньше первого, возвращаем первое состояние
     if (target_time <= states[0].t) return states[0];
@@ -456,6 +481,39 @@ void writeToCSV(const string& filename, const vector<RecordData>& records) {
     cout << "Результаты записаны в файл: " << filename << endl;
 }
 
+// Функция для проверки согласованности методов
+void verifyMethodsConsistency() {
+    cout << "\n=== ПРОВЕРКА СОГЛАСОВАННОСТИ МЕТОДОВ ===" << endl;
+
+    // Сравниваем методы при малом шаге
+    auto states_euler_001 = eulerMethod(0.001, 0, 1.0);
+    auto states_mod_euler_01 = modifiedEulerMethod(0.01, 0, 1.0);
+    auto states_rk4_01 = rungeKuttaMethod(0.01, 0, 1.0);
+
+    State s_euler = states_euler_001.back();
+    State s_mod = states_mod_euler_01.back();
+    State s_rk4 = states_rk4_01.back();
+
+    cout << "t=1.0с, Эйлер (h=0.001):     V=" << s_euler.V << ", θ=" << s_euler.theta * 180 / M_PI << "°" << endl;
+    cout << "t=1.0с, Мод.Эйлер (h=0.01):  V=" << s_mod.V << ", θ=" << s_mod.theta * 180 / M_PI << "°" << endl;
+    cout << "t=1.0с, РК4 (h=0.01):        V=" << s_rk4.V << ", θ=" << s_rk4.theta * 180 / M_PI << "°" << endl;
+
+    // Проверка начальных производных
+    State s0;
+    s0.t = t0; s0.V = V0; s0.theta_c = theta_c0; s0.y = y0_val;
+    s0.omega_z = omega_z0; s0.theta = theta0; s0.m = m0;
+
+    AirControl::AtmosphereParams atm0 = AirControl::AtmosphereCalculator::Calculate(s0.y);
+    State ds0;
+    derivatives(s0, ds0, atm0, 0.0);
+
+    cout << "\nНачальные производные (α=0):" << endl;
+    cout << "dV/dt = " << ds0.V << " м/с²" << endl;
+    cout << "dθ/dt = " << ds0.theta << " рад/с" << endl;
+    cout << "dω_z/dt = " << ds0.omega_z << " рад/с²" << endl;
+    cout << "dθ_c/dt = " << ds0.theta_c << " рад/с" << endl;
+}
+
 // Основная функция
 int main() {
     // Настройка кодировки консоли
@@ -473,6 +531,9 @@ int main() {
     cout << "omega_z0 = " << omega_z0 << " 1/с" << endl;
     cout << "t_k = " << t_k << " с" << endl;
     cout << "==========================================" << endl;
+
+    // Запуск проверки согласованности методов
+    verifyMethodsConsistency();
 
     // Массивы для хранения информации о методах
     vector<string> method_names = { "Euler", "ModifiedEuler", "RungeKutta" };
@@ -578,5 +639,22 @@ int main() {
             }
         }
     }
+
+    // Создание batch-файла для открытия всех CSV в Excel
+    ofstream bat("open_excel.bat");
+    bat << "@echo off\n";
+    bat << "echo Открытие CSV файлов в Excel...\n";
+    for (const string& file : created_files) {
+        bat << "start excel \"" << file << "\"\n";
+    }
+    bat << "pause\n";
+    bat.close();
+
+    cout << "\nДля открытия результатов в Excel запустите файл open_excel.bat" << endl;
+    cout << "Или откройте CSV файлы вручную." << endl;
+
+    cout << "\nНажмите Enter для завершения...";
+    cin.get();
+
     return 0;
 }
